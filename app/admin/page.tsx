@@ -1,7 +1,6 @@
 "use client"
 
 import type React from "react"
-
 import { useState, useRef } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -9,13 +8,11 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
-import { Separator } from "@/components/ui/separator"
-import { Upload, FileIcon, ImageIcon, Trash2, Download, Eye, RefreshCw, Search } from "lucide-react"
+import { Upload, FileIcon, ImageIcon, Trash2, Download, Eye } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { initializeApp } from "firebase/app"
 import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage"
-import { getFirestore, collection, query, getDocs, limit } from "firebase/firestore"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import Link from "next/link"
 
 // Firebase configuration - replace with your config
 const firebaseConfig = {
@@ -30,7 +27,6 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig)
 const storage = getStorage(app)
-const db = getFirestore(app)
 
 interface UploadedFile {
   id: string
@@ -41,22 +37,11 @@ interface UploadedFile {
   uploadedAt: Date
 }
 
-interface ProcessedData {
-  id: string
-  fileName: string
-  processedAt: Date
-  status: string
-  data: any
-}
-
 export default function AdminDashboard() {
   const [files, setFiles] = useState<File[]>([])
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
-  const [processedData, setProcessedData] = useState<ProcessedData[]>([])
-  const [fetchingData, setFetchingData] = useState(false)
-  const [selectedJson, setSelectedJson] = useState<any>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
 
@@ -102,70 +87,6 @@ export default function AdminDashboard() {
 
   const removeFile = (index: number) => {
     setFiles((prev) => prev.filter((_, i) => i !== index))
-  }
-
-  const fetchProcessedData = async (fileName?: string) => {
-    setFetchingData(true)
-    try {
-      let q
-      if (fileName) {
-        // Query for specific file - search in all documents
-        q = query(collection(db, "invoices"), limit(50))
-      } else {
-        // Get all documents from invoices collection
-        q = query(collection(db, "invoices"), limit(50))
-      }
-
-      const querySnapshot = await getDocs(q)
-      const data: ProcessedData[] = []
-
-      querySnapshot.forEach((doc) => {
-        const docData = doc.data()
-
-        // If searching for specific file, filter by fileName
-        if (fileName) {
-          const docFileName = docData.fileName || docData.name || docData.originalName || ""
-          if (!docFileName.toLowerCase().includes(fileName.toLowerCase())) {
-            return // Skip this document
-          }
-        }
-
-        data.push({
-          id: doc.id, // This is the auto-generated document ID
-          fileName: docData.fileName || docData.name || docData.originalName || `Document ${doc.id.substring(0, 8)}`,
-          processedAt:
-            docData.processedAt?.toDate() || docData.uploadedAt?.toDate() || docData.createdAt?.toDate() || new Date(),
-          status: docData.status || docData.state || "processed",
-          data: {
-            documentId: doc.id,
-            ...docData,
-          },
-        })
-      })
-
-      // Sort by processed date (newest first)
-      data.sort((a, b) => b.processedAt.getTime() - a.processedAt.getTime())
-
-      setProcessedData(data)
-
-      if (fileName && data.length > 0) {
-        setSelectedJson(data[0].data)
-      }
-
-      toast({
-        title: "Data fetched",
-        description: `Found ${data.length} document(s) in /invoices collection.`,
-      })
-    } catch (error) {
-      console.error("Error fetching data:", error)
-      toast({
-        title: "Fetch failed",
-        description: "Error fetching data from Firestore /invoices collection.",
-        variant: "destructive",
-      })
-    } finally {
-      setFetchingData(false)
-    }
   }
 
   const uploadFiles = async () => {
@@ -220,11 +141,6 @@ export default function AdminDashboard() {
         title: "Upload successful",
         description: `${results.length} file(s) uploaded. Cloud Function will process them.`,
       })
-
-      // Wait a moment then try to fetch processed data
-      setTimeout(() => {
-        fetchProcessedData()
-      }, 3000)
     } catch (error) {
       console.error("Upload failed:", error)
       toast({
@@ -267,30 +183,16 @@ export default function AdminDashboard() {
     return Number.parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i]
   }
 
-  const extractInvoiceData = (data: any) => {
-    // Try different possible field names for each property
-    const invoiceNumber = data.invoiceNumber || data.invoice_number || data.number || data.invoiceNo || "N/A"
-    const vendorName = data.vendorName || data.vendor_name || data.vendor || data.supplier || data.company || "N/A"
-    const invoiceDate = data.invoiceDate || data.invoice_date || data.date || data.issueDate || "N/A"
-    const totalAmount = data.totalAmount || data.total_amount || data.total || data.amount || data.grandTotal || "N/A"
-    const status = data.status || data.state || data.processing_status || "processed"
-
-    return {
-      invoiceNumber,
-      vendorName,
-      invoiceDate,
-      totalAmount,
-      status,
-    }
-  }
-
   return (
     <div className="container mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Smart Invoice and Data Extraction using Google AI</h1>
-          <p className="text-muted-foreground">Upload files and view processed results from Cloud Functions</p>
+          <h1 className="text-3xl font-bold">Smart Invoice Upload Dashboard</h1>
+          <p className="text-muted-foreground">Upload invoice files for AI processing</p>
         </div>
+        <Link href="/admin/processed">
+          <Button variant="outline">View Processed Data</Button>
+        </Link>
       </div>
 
       {/* Upload Section */}
@@ -368,133 +270,23 @@ export default function AdminDashboard() {
         </CardContent>
       </Card>
 
-      {/* Processed Data Section */}
+      {/* Upload Status Section */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            Processed Invoice Data
-            <Button variant="outline" size="sm" onClick={() => fetchProcessedData()} disabled={fetchingData}>
-              {fetchingData ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              Refresh
-            </Button>
-          </CardTitle>
-          <CardDescription>Invoice data extracted from processed files</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {processedData.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Search className="mx-auto h-12 w-12 mb-4" />
-              <p>No processed data found</p>
-              <Button variant="outline" onClick={() => fetchProcessedData()} className="mt-2">
-                Fetch Data
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Invoice Number</TableHead>
-                    <TableHead>Vendor Name</TableHead>
-                    <TableHead>Invoice Date</TableHead>
-                    <TableHead>Total Amount</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {processedData.map((item) => {
-                    const invoiceData = extractInvoiceData(item.data)
-                    return (
-                      <TableRow key={item.id}>
-                        <TableCell className="font-medium">{invoiceData.invoiceNumber}</TableCell>
-                        <TableCell>{invoiceData.vendorName}</TableCell>
-                        <TableCell>{invoiceData.invoiceDate}</TableCell>
-                        <TableCell>{invoiceData.totalAmount}</TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={
-                              invoiceData.status === "success" || invoiceData.status === "processed"
-                                ? "default"
-                                : "destructive"
-                            }
-                          >
-                            {invoiceData.status}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-2">
-                            <Button variant="ghost" size="sm" onClick={() => setSelectedJson(item.data)}>
-                              <Eye className="h-4 w-4" />
-                            </Button>
-                            <span className="text-xs text-muted-foreground">
-                              {item.processedAt.toLocaleDateString()}
-                            </span>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* JSON Viewer Section */}
-      {selectedJson && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Full JSON Data</CardTitle>
-            <CardDescription>Complete processed data from Cloud Function</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    navigator.clipboard.writeText(JSON.stringify(selectedJson, null, 2))
-                    toast({
-                      title: "Copied to clipboard",
-                      description: "JSON data copied to clipboard.",
-                    })
-                  }}
-                >
-                  Copy JSON
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => setSelectedJson(null)}>
-                  Close
-                </Button>
-              </div>
-              <pre className="p-4 bg-slate-950 text-slate-50 rounded-lg text-xs overflow-x-auto max-h-96">
-                {JSON.stringify(selectedJson, null, 2)}
-              </pre>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      <Separator />
-
-      {/* Uploaded Files Section */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Uploaded Files ({uploadedFiles.length})</CardTitle>
-          <CardDescription>Files uploaded to Firebase Storage</CardDescription>
+          <CardTitle>Upload Status</CardTitle>
+          <CardDescription>Recently uploaded files and their processing status</CardDescription>
         </CardHeader>
         <CardContent>
           {uploadedFiles.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               <FileIcon className="mx-auto h-12 w-12 mb-4" />
               <p>No files uploaded yet</p>
+              <p className="text-sm">Upload files above to see them here</p>
             </div>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-3">
               {uploadedFiles.map((file) => (
-                <div key={file.id} className="flex items-center justify-between p-4 border rounded-lg">
+                <div key={file.id} className="flex items-center justify-between p-4 border rounded-lg bg-muted/20">
                   <div className="flex items-center gap-3">
                     {file.type.startsWith("image/") ? (
                       <ImageIcon className="h-5 w-5 text-blue-500" />
@@ -506,19 +298,15 @@ export default function AdminDashboard() {
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <span>{formatFileSize(file.size)}</span>
                         <span>•</span>
-                        <span>{file.uploadedAt.toLocaleDateString()}</span>
+                        <span>Uploaded {file.uploadedAt.toLocaleDateString()}</span>
+                        <span>•</span>
+                        <Badge variant="outline" className="text-xs">
+                          Processing...
+                        </Badge>
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => fetchProcessedData(file.name)}
-                      disabled={fetchingData}
-                    >
-                      <Search className="h-4 w-4" />
-                    </Button>
                     <Button variant="ghost" size="sm" onClick={() => window.open(file.url, "_blank")}>
                       <Eye className="h-4 w-4" />
                     </Button>
@@ -540,6 +328,11 @@ export default function AdminDashboard() {
                   </div>
                 </div>
               ))}
+              <div className="text-center pt-4">
+                <Link href="/admin/processed">
+                  <Button>View Processed Results →</Button>
+                </Link>
+              </div>
             </div>
           )}
         </CardContent>
