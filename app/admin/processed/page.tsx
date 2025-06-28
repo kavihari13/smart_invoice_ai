@@ -126,25 +126,32 @@ export default function ProcessedDataPage() {
   const validateInvoiceTotal = (data: any) => {
     const items = data.items || []
     const totalAmount = data.totalAmount || data.total_amount || data.total || data.amount || data.grandTotal || 0
+    const gstAmount = data.gstAmount || data.gst_amount || data.gst || data.tax || data.taxAmount || 0
 
     if (items.length === 0) {
       return {
         isValid: false,
         message: "No items found",
         itemsTotal: 0,
+        gstAmount: Number.parseFloat(gstAmount.toString()) || 0,
         invoiceTotal: Number.parseFloat(totalAmount.toString()) || 0,
+        calculatedTotal: 0,
         difference: 0,
       }
     }
 
-    // Calculate sum of all item totals
+    // Calculate sum of all item totals (before GST)
     const itemsTotal = items.reduce((sum: number, item: any) => {
       const itemTotal = Number.parseFloat(item.total || item.amount || "0")
       return sum + itemTotal
     }, 0)
 
+    const parsedGstAmount = Number.parseFloat(gstAmount.toString()) || 0
     const invoiceTotal = Number.parseFloat(totalAmount.toString()) || 0
-    const difference = Math.abs(itemsTotal - invoiceTotal)
+
+    // Calculate expected total (items + GST)
+    const calculatedTotal = itemsTotal + parsedGstAmount
+    const difference = Math.abs(calculatedTotal - invoiceTotal)
 
     // Consider valid if difference is less than 0.01 (to handle floating point precision)
     const isValid = difference < 0.01
@@ -153,7 +160,9 @@ export default function ProcessedDataPage() {
       isValid,
       message: isValid ? "Valid" : `Mismatch: ₹${difference.toFixed(2)}`,
       itemsTotal,
+      gstAmount: parsedGstAmount,
       invoiceTotal,
+      calculatedTotal,
       difference,
     }
   }
@@ -346,7 +355,8 @@ export default function ProcessedDataPage() {
                                 <div className="flex justify-between items-center mb-3">
                                   <h4 className="font-medium text-sm">Invoice Items ({items.length})</h4>
                                   <div className="text-sm text-muted-foreground">
-                                    Items Total: {formatCurrency(validation.itemsTotal)} | Invoice Total:{" "}
+                                    Items Total: {formatCurrency(validation.itemsTotal)} | GST:{" "}
+                                    {formatCurrency(validation.gstAmount)} | Invoice Total:{" "}
                                     {formatCurrency(validation.invoiceTotal)}
                                     {!validation.isValid && (
                                       <span className="text-red-500 ml-2">
@@ -376,20 +386,32 @@ export default function ProcessedDataPage() {
                                     </div>
                                   ))}
                                 </div>
-                                <div className="mt-3 pt-3 border-t flex justify-between items-center">
-                                  <span className="font-medium text-sm">Calculated Total:</span>
-                                  <span className="font-bold text-lg">{formatCurrency(validation.itemsTotal)}</span>
-                                </div>
-                                <div className="flex justify-between items-center">
-                                  <span className="font-medium text-sm">Invoice Total:</span>
-                                  <span className="font-bold text-lg">{formatCurrency(validation.invoiceTotal)}</span>
-                                </div>
-                                {!validation.isValid && (
-                                  <div className="flex justify-between items-center text-red-600">
-                                    <span className="font-medium text-sm">Difference:</span>
-                                    <span className="font-bold text-lg">{formatCurrency(validation.difference)}</span>
+                                <div className="mt-3 pt-3 border-t space-y-2">
+                                  <div className="flex justify-between items-center">
+                                    <span className="font-medium text-sm">Items Subtotal:</span>
+                                    <span className="font-bold text-lg">{formatCurrency(validation.itemsTotal)}</span>
                                   </div>
-                                )}
+                                  <div className="flex justify-between items-center">
+                                    <span className="font-medium text-sm">GST Amount:</span>
+                                    <span className="font-bold text-lg">{formatCurrency(validation.gstAmount)}</span>
+                                  </div>
+                                  <div className="flex justify-between items-center border-t pt-2">
+                                    <span className="font-medium text-sm">Calculated Total:</span>
+                                    <span className="font-bold text-lg">
+                                      {formatCurrency(validation.calculatedTotal)}
+                                    </span>
+                                  </div>
+                                  <div className="flex justify-between items-center">
+                                    <span className="font-medium text-sm">Invoice Total:</span>
+                                    <span className="font-bold text-lg">{formatCurrency(validation.invoiceTotal)}</span>
+                                  </div>
+                                  {!validation.isValid && (
+                                    <div className="flex justify-between items-center text-red-600 border-t pt-2">
+                                      <span className="font-medium text-sm">Difference:</span>
+                                      <span className="font-bold text-lg">{formatCurrency(validation.difference)}</span>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
                             </TableCell>
                           </TableRow>
