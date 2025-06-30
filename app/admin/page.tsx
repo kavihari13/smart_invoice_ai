@@ -8,11 +8,21 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
-import { Upload, FileIcon, ImageIcon, Trash2, Download, Eye } from "lucide-react"
+import { Upload, FileIcon, ImageIcon, Trash2, Download, Eye, AlertTriangle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { initializeApp } from "firebase/app"
 import { getStorage, ref, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage"
 import Link from "next/link"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 // Firebase configuration - replace with your config
 const firebaseConfig = {
@@ -37,18 +47,120 @@ interface UploadedFile {
   uploadedAt: Date
 }
 
+interface ValidationError {
+  fileName: string
+  issues: string[]
+}
+
 export default function AdminDashboard() {
   const [files, setFiles] = useState<File[]>([])
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [validationError, setValidationError] = useState<ValidationError | null>(null)
+  const [showValidationDialog, setShowValidationDialog] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
 
-  const handleFileSelect = (selectedFiles: FileList | null) => {
+  // Image validation functions
+  const detectBlur = (canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): boolean => {
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const data = imageData.data
+
+    // Convert to grayscale and calculate variance (blur detection)
+    let sum = 0
+    let sumSquared = 0
+    const pixels = []
+
+    for (let i = 0; i < data.length; i += 4) {
+      const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
+      pixels.push(gray)
+      sum += gray
+      sumSquared += gray * gray
+    }
+
+    const mean = sum / pixels.length
+    const variance = sumSquared / pixels.length - mean * mean
+
+    // Low variance indicates blur (threshold can be adjusted)
+    return variance < 1000
+  }
+
+  const detectGlare = (canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): boolean => {
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const data = imageData.data
+
+    let overexposedPixels = 0
+    const totalPixels = data.length / 4
+
+    // Check for overexposed pixels (very bright areas)
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i]
+      const g = data[i + 1]
+      const b = data[i + 2]
+
+      // Consider pixel overexposed if all RGB values are very high
+      if (r > 240 && g > 240 && b > 240) {
+        overexposedPixels++
+      }
+    }
+
+    const overexposedPercentage = (overexposedPixels / totalPixels) * 100
+
+    // If more than 15% of pixels are overexposed, consider it glare
+    return overexposedPercentage > 15
+  }
+
+  const validateImage = (file: File): Promise<string[]> => {
+    return new Promise((resolve) => {
+      const issues: string[] = []
+      const img = new Image()
+      const canvas = document.createElement("canvas")
+      const ctx = canvas.getContext("2d")
+
+      if (!ctx) {
+        resolve(["Unable to process image for validation"])
+        return
+      }
+
+      img.onload = () => {
+        canvas.width = img.width
+        canvas.height = img.height
+        ctx.drawImage(img, 0, 0)
+
+        try {
+          // Check for blur
+          if (detectBlur(canvas, ctx)) {
+            issues.push("Image appears to be blurry or out of focus")
+          }
+
+          // Check for glare
+          if (detectGlare(canvas, ctx)) {
+            issues.push("Image has excessive glare or overexposure")
+          }
+
+          resolve(issues)
+        } catch (error) {
+          console.error("Error during image validation:", error)
+          resolve(["Error occurred during image validation"])
+        }
+      }
+
+      img.onerror = () => {
+        resolve(["Unable to load image for validation"])
+      }
+
+      img.src = URL.createObjectURL(file)
+    })
+  }
+
+  const handleFileSelect = async (selectedFiles: FileList | null) => {
     if (!selectedFiles) return
 
-    const validFiles = Array.from(selectedFiles).filter((file) => {
+    const validFiles: File[] = []
+    const validationErrors: ValidationError[] = []
+
+    for (const file of Array.from(selectedFiles)) {
       const isValidType = file.type.startsWith("image/") || file.type === "application/pdf"
       const isValidSize = file.size <= 10 * 1024 * 1024 // 10MB limit
 
@@ -58,7 +170,7 @@ export default function AdminDashboard() {
           description: `${file.name} is not a valid image or PDF file.`,
           variant: "destructive",
         })
-        return false
+        continue
       }
 
       if (!isValidSize) {
@@ -67,11 +179,30 @@ export default function AdminDashboard() {
           description: `${file.name} exceeds the 10MB limit.`,
           variant: "destructive",
         })
-        return false
+        continue
       }
 
-      return true
-    })
+      // Validate images for blur and glare
+      if (file.type.startsWith("image/")) {
+        const issues = await validateImage(file)
+        if (issues.length > 0) {
+          validationErrors.push({
+            fileName: file.name,
+            issues: issues,
+          })
+          continue
+        }
+      }
+
+      validFiles.push(file)
+    }
+
+    // Show validation errors if any
+    if (validationErrors.length > 0) {
+      setValidationError(validationErrors[0]) // Show first error
+      setShowValidationDialog(true)
+      return
+    }
 
     setFiles((prev) => [...prev, ...validFiles])
   }
@@ -200,7 +331,7 @@ export default function AdminDashboard() {
         <CardHeader>
           <CardTitle>Upload Invoice Files</CardTitle>
           <CardDescription>
-            Upload images (JPG, PNG, GIF) or PDF files. Cloud Function will process them automatically.
+            Upload images (JPG, PNG, GIF) or PDF files. Images will be validated for quality before upload.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -213,6 +344,9 @@ export default function AdminDashboard() {
             <Upload className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
             <p className="text-lg font-medium mb-2">Drop files here or click to browse</p>
             <p className="text-sm text-muted-foreground">Supports images and PDF files up to 10MB</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Images will be automatically validated for blur and glare
+            </p>
             <Input
               ref={fileInputRef}
               type="file"
@@ -237,6 +371,11 @@ export default function AdminDashboard() {
                       )}
                       <span className="text-sm font-medium">{file.name}</span>
                       <Badge variant="secondary">{formatFileSize(file.size)}</Badge>
+                      {file.type.startsWith("image/") && (
+                        <Badge variant="outline" className="text-xs">
+                          ✓ Validated
+                        </Badge>
+                      )}
                     </div>
                     <Button variant="ghost" size="sm" onClick={() => removeFile(index)}>
                       <Trash2 className="h-4 w-4" />
@@ -337,6 +476,44 @@ export default function AdminDashboard() {
           )}
         </CardContent>
       </Card>
+
+      {/* Image Validation Error Dialog */}
+      <AlertDialog open={showValidationDialog} onOpenChange={setShowValidationDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Image Quality Issue Detected
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-2">
+              <p>
+                The following issues were detected with <strong>{validationError?.fileName}</strong>:
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-sm">
+                {validationError?.issues.map((issue, index) => (
+                  <li key={index} className="text-destructive">
+                    {issue}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-sm text-muted-foreground mt-3">
+                Please retake the photo with better lighting and focus for optimal AI processing results.
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setValidationError(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setShowValidationDialog(false)
+                setValidationError(null)
+              }}
+            >
+              Try Again
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
