@@ -5,7 +5,7 @@ import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { RefreshCw, Search, CheckCircle, XCircle, Eye, ArrowLeft, Check, X, Filter } from "lucide-react"
+import { RefreshCw, Search, CheckCircle, XCircle, Eye, ArrowLeft, Check, X, Filter, Calendar } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { initializeApp } from "firebase/app"
 import { getFirestore, collection, query, getDocs, limit, doc, updateDoc } from "firebase/firestore"
@@ -14,6 +14,9 @@ import { ChevronDown, ChevronRight } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Calendar as CalendarComponent } from "@/components/ui/calendar"
+import { format } from "date-fns"
 import Link from "next/link"
 
 // Firebase configuration - replace with your config
@@ -42,6 +45,10 @@ interface FilterState {
   status: string
   validation: string
   search: string
+  dateRange: {
+    from: Date | undefined
+    to: Date | undefined
+  }
 }
 
 export default function ProcessedDataPage() {
@@ -54,6 +61,10 @@ export default function ProcessedDataPage() {
     status: "all",
     validation: "all",
     search: "",
+    dateRange: {
+      from: undefined,
+      to: undefined,
+    },
   })
   const { toast } = useToast()
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
@@ -152,6 +163,37 @@ export default function ProcessedDataPage() {
       })
     }
 
+    // Filter by date range
+    if (filterState.dateRange.from || filterState.dateRange.to) {
+      filtered = filtered.filter((item) => {
+        const itemDate = item.processedAt
+        const fromDate = filterState.dateRange.from
+        const toDate = filterState.dateRange.to
+
+        // If only 'from' date is set
+        if (fromDate && !toDate) {
+          return itemDate >= fromDate
+        }
+
+        // If only 'to' date is set
+        if (!fromDate && toDate) {
+          // Set to end of day for 'to' date
+          const endOfToDate = new Date(toDate)
+          endOfToDate.setHours(23, 59, 59, 999)
+          return itemDate <= endOfToDate
+        }
+
+        // If both dates are set
+        if (fromDate && toDate) {
+          const endOfToDate = new Date(toDate)
+          endOfToDate.setHours(23, 59, 59, 999)
+          return itemDate >= fromDate && itemDate <= endOfToDate
+        }
+
+        return true
+      })
+    }
+
     // Filter by search term
     if (filterState.search.trim()) {
       const searchTerm = filterState.search.toLowerCase()
@@ -168,16 +210,77 @@ export default function ProcessedDataPage() {
     setFilteredData(filtered)
   }
 
-  const handleFilterChange = (key: keyof FilterState, value: string) => {
+  const handleFilterChange = (key: keyof FilterState, value: any) => {
     const newFilters = { ...filters, [key]: value }
     setFilters(newFilters)
     applyFilters(processedData, newFilters)
   }
 
+  const handleDateRangeChange = (field: "from" | "to", date: Date | undefined) => {
+    const newDateRange = { ...filters.dateRange, [field]: date }
+    const newFilters = { ...filters, dateRange: newDateRange }
+    setFilters(newFilters)
+    applyFilters(processedData, newFilters)
+  }
+
   const clearFilters = () => {
-    const clearedFilters = { status: "all", validation: "all", search: "" }
+    const clearedFilters = {
+      status: "all",
+      validation: "all",
+      search: "",
+      dateRange: { from: undefined, to: undefined },
+    }
     setFilters(clearedFilters)
     applyFilters(processedData, clearedFilters)
+  }
+
+  const clearDateRange = () => {
+    handleFilterChange("dateRange", { from: undefined, to: undefined })
+  }
+
+  // Quick date range presets
+  const setDateRangePreset = (preset: string) => {
+    const today = new Date()
+    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+    let from: Date | undefined
+    let to: Date | undefined
+
+    switch (preset) {
+      case "today":
+        from = startOfToday
+        to = today
+        break
+      case "yesterday":
+        const yesterday = new Date(startOfToday)
+        yesterday.setDate(yesterday.getDate() - 1)
+        from = yesterday
+        to = yesterday
+        break
+      case "last7days":
+        from = new Date(startOfToday)
+        from.setDate(from.getDate() - 7)
+        to = today
+        break
+      case "last30days":
+        from = new Date(startOfToday)
+        from.setDate(from.getDate() - 30)
+        to = today
+        break
+      case "thisMonth":
+        from = new Date(today.getFullYear(), today.getMonth(), 1)
+        to = today
+        break
+      case "lastMonth":
+        const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+        const lastDayOfLastMonth = new Date(today.getFullYear(), today.getMonth(), 0)
+        from = lastMonth
+        to = lastDayOfLastMonth
+        break
+    }
+
+    if (from || to) {
+      handleFilterChange("dateRange", { from, to })
+    }
   }
 
   const updateInvoiceStatus = async (documentId: string, newStatus: "approved" | "rejected") => {
@@ -371,10 +474,10 @@ export default function ProcessedDataPage() {
             <Filter className="h-5 w-5" />
             Filters
           </CardTitle>
-          <CardDescription>Filter invoices by status, validation, or search terms</CardDescription>
+          <CardDescription>Filter invoices by status, validation, date range, or search terms</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
             <div className="space-y-2">
               <Label htmlFor="status-filter">Status</Label>
               <Select value={filters.status} onValueChange={(value) => handleFilterChange("status", value)}>
@@ -408,17 +511,56 @@ export default function ProcessedDataPage() {
               <Label htmlFor="search-filter">Search</Label>
               <Input
                 id="search-filter"
-                placeholder="Invoice number, vendor, filename..."
+                placeholder="Invoice number, vendor..."
                 value={filters.search}
                 onChange={(e) => handleFilterChange("search", e.target.value)}
               />
             </div>
 
             <div className="space-y-2">
+              <Label>Date Range</Label>
+              <div className="flex gap-2">
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className="flex-1 justify-start text-left font-normal bg-transparent">
+                      <Calendar className="mr-2 h-4 w-4" />
+                      {filters.dateRange.from ? format(filters.dateRange.from, "MMM dd") : "From"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <CalendarComponent
+                      mode="single"
+                      selected={filters.dateRange.from}
+                      onSelect={(date) => handleDateRangeChange("from", date)}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className="flex-1 justify-start text-left font-normal bg-transparent">
+                      <Calendar className="mr-2 h-4 w-4" />
+                      {filters.dateRange.to ? format(filters.dateRange.to, "MMM dd") : "To"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <CalendarComponent
+                      mode="single"
+                      selected={filters.dateRange.to}
+                      onSelect={(date) => handleDateRangeChange("to", date)}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+            </div>
+
+            <div className="space-y-2">
               <Label>&nbsp;</Label>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={clearFilters} className="flex-1 bg-transparent">
-                  Clear Filters
+                  Clear All
                 </Button>
                 <Badge variant="secondary" className="px-3 py-1">
                   {stats.total} results
@@ -427,8 +569,43 @@ export default function ProcessedDataPage() {
             </div>
           </div>
 
+          {/* Date Range Presets */}
+          <div className="mt-4 space-y-2">
+            <Label className="text-sm text-muted-foreground">Quick Date Ranges:</Label>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => setDateRangePreset("today")}>
+                Today
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setDateRangePreset("yesterday")}>
+                Yesterday
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setDateRangePreset("last7days")}>
+                Last 7 Days
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setDateRangePreset("last30days")}>
+                Last 30 Days
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setDateRangePreset("thisMonth")}>
+                This Month
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setDateRangePreset("lastMonth")}>
+                Last Month
+              </Button>
+              {(filters.dateRange.from || filters.dateRange.to) && (
+                <Button variant="ghost" size="sm" onClick={clearDateRange}>
+                  <X className="h-4 w-4 mr-1" />
+                  Clear Dates
+                </Button>
+              )}
+            </div>
+          </div>
+
           {/* Active Filters Display */}
-          {(filters.status !== "all" || filters.validation !== "all" || filters.search.trim()) && (
+          {(filters.status !== "all" ||
+            filters.validation !== "all" ||
+            filters.search.trim() ||
+            filters.dateRange.from ||
+            filters.dateRange.to) && (
             <div className="mt-4 flex flex-wrap gap-2">
               <span className="text-sm text-muted-foreground">Active filters:</span>
               {filters.status !== "all" && (
@@ -457,6 +634,15 @@ export default function ProcessedDataPage() {
                 <Badge variant="outline" className="gap-1">
                   Search: "{filters.search}"
                   <button onClick={() => handleFilterChange("search", "")} className="ml-1 hover:bg-muted rounded-full">
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              )}
+              {(filters.dateRange.from || filters.dateRange.to) && (
+                <Badge variant="outline" className="gap-1">
+                  Date: {filters.dateRange.from ? format(filters.dateRange.from, "MMM dd") : "Start"} -{" "}
+                  {filters.dateRange.to ? format(filters.dateRange.to, "MMM dd") : "End"}
+                  <button onClick={clearDateRange} className="ml-1 hover:bg-muted rounded-full">
                     <X className="h-3 w-3" />
                   </button>
                 </Badge>
