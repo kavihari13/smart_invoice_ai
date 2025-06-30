@@ -823,9 +823,33 @@ export default function ProcessedDataPage() {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => {
-                                  const fileUrl = item.data.fileUrl || item.data.downloadURL || item.data.url
-                                  const fileName = item.fileName
-                                  const fileType = item.data.fileType || item.data.type || "application/pdf"
+                                  // Try multiple possible field names for file URL
+                                  const fileUrl =
+                                    item.data.fileUrl ||
+                                    item.data.downloadURL ||
+                                    item.data.url ||
+                                    item.data.file_url ||
+                                    item.data.storageUrl ||
+                                    item.data.publicUrl ||
+                                    item.data.signedUrl
+
+                                  const fileName =
+                                    item.fileName || item.data.fileName || item.data.name || "Unknown File"
+
+                                  // Try multiple possible field names for file type
+                                  const fileType =
+                                    item.data.fileType ||
+                                    item.data.type ||
+                                    item.data.mimeType ||
+                                    item.data.contentType ||
+                                    "application/pdf"
+
+                                  console.log("File data:", {
+                                    fileUrl,
+                                    fileName,
+                                    fileType,
+                                    fullData: item.data,
+                                  })
 
                                   if (fileUrl) {
                                     setSelectedFile({
@@ -834,15 +858,28 @@ export default function ProcessedDataPage() {
                                       type: fileType,
                                     })
                                   } else {
+                                    // Show all available data for debugging
+                                    console.log("Available data fields:", Object.keys(item.data))
                                     toast({
                                       title: "File not found",
-                                      description: "No file URL available for preview.",
+                                      description: `No file URL found. Available fields: ${Object.keys(item.data).join(", ")}`,
                                       variant: "destructive",
                                     })
                                   }
                                 }}
                               >
                                 <Eye className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  console.log("Full item data:", item.data)
+                                  setSelectedJson(item.data)
+                                }}
+                                className="text-blue-600"
+                              >
+                                Debug
                               </Button>
                               <span className="text-xs text-muted-foreground">
                                 {item.processedAt.toLocaleDateString()}
