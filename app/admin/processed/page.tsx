@@ -1,37 +1,24 @@
 "use client"
-import { useState, useEffect } from "react"
+
+import React from "react"
+import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import {
-  Search,
-  Download,
-  Eye,
-  Filter,
-  Calendar,
-  DollarSign,
-  FileText,
-  ArrowLeft,
-  Trash2,
-  AlertTriangle,
-} from "lucide-react"
+import { RefreshCw, Search, CheckCircle, XCircle, ArrowLeft, Check, X, Filter, Calendar } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { initializeApp } from "firebase/app"
-import { getFirestore, collection, getDocs, query, orderBy, deleteDoc, doc } from "firebase/firestore"
+import { getFirestore, collection, query, getDocs, limit, doc, updateDoc, deleteDoc } from "firebase/firestore"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { ChevronDown, ChevronRight } from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Calendar as CalendarComponent } from "@/components/ui/calendar"
+import { format } from "date-fns"
 import Link from "next/link"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
+import { getStorage, ref, getDownloadURL } from "firebase/storage"
 
 // Firebase configuration - replace with your config
 const firebaseConfig = {
@@ -46,438 +33,1051 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig)
 const db = getFirestore(app)
+const storage = getStorage(app)
 
-interface ProcessedInvoice {
+interface ProcessedData {
   id: string
   fileName: string
   processedAt: Date
-  status: "completed" | "processing" | "error"
-  extractedData: {
-    invoiceNumber?: string
-    date?: string
-    vendor?: string
-    total?: number
-    currency?: string
-    items?: Array<{
-      description: string
-      quantity: number
-      unitPrice: number
-      total: number
-    }>
-  }
-  originalImageUrl?: string
-  confidence?: number
+  status: string
+  data: any
 }
 
-export default function ProcessedInvoicesPage() {
-  const [invoices, setInvoices] = useState<ProcessedInvoice[]>([])
-  const [filteredInvoices, setFilteredInvoices] = useState<ProcessedInvoice[]>([])
-  const [loading, setLoading] = useState(true)
-  const [searchTerm, setSearchTerm] = useState("")
-  const [statusFilter, setStatusFilter] = useState<string>("all")
-  const [dateFilter, setDateFilter] = useState<string>("all")
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
-  const [invoiceToDelete, setInvoiceToDelete] = useState<ProcessedInvoice | null>(null)
+interface FilterState {
+  status: string
+  validation: string
+  search: string
+  dateRange: {
+    from: Date | undefined
+    to: Date | undefined
+  }
+}
+
+interface ImageValidationError {
+  fileName: string
+  issues: string[]
+}
+
+export default function ProcessedDataPage() {
+  const [processedData, setProcessedData] = useState<ProcessedData[]>([])
+  const [filteredData, setFilteredData] = useState<ProcessedData[]>([])
+  const [fetchingData, setFetchingData] = useState(false)
+  const [selectedJson, setSelectedJson] = useState<any>(null)
+  const [updatingStatus, setUpdatingStatus] = useState<string | null>(null)
+  const [filters, setFilters] = useState<FilterState>({
+    status: "all",
+    validation: "all",
+    search: "",
+    dateRange: {
+      from: undefined,
+      to: undefined,
+    },
+  })
   const { toast } = useToast()
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
+  const [validationError, setValidationError] = useState<ImageValidationError | null>(null)
 
-  useEffect(() => {
-    fetchProcessedInvoices()
-  }, [])
-
-  useEffect(() => {
-    applyFilters()
-  }, [invoices, searchTerm, statusFilter, dateFilter])
-
-  const fetchProcessedInvoices = async () => {
+  const fetchProcessedData = async (fileName?: string) => {
+    setFetchingData(true)
     try {
-      setLoading(true)
-      const q = query(collection(db, "processed_invoices"), orderBy("processedAt", "desc"))
-      const querySnapshot = await getDocs(q)
+      let q
+      if (fileName) {
+        // Query for specific file - search in all documents
+        q = query(collection(db, "invoices"), limit(50))
+      } else {
+        // Get all documents from invoices collection
+        q = query(collection(db, "invoices"), limit(50))
+      }
 
-      const invoicesData: ProcessedInvoice[] = []
+      const querySnapshot = await getDocs(q)
+      const data: ProcessedData[] = []
+
       querySnapshot.forEach((doc) => {
-        const data = doc.data()
-        invoicesData.push({
-          id: doc.id,
-          fileName: data.fileName || "Unknown",
-          processedAt: data.processedAt?.toDate() || new Date(),
-          status: data.status || "processing",
-          extractedData: data.extractedData || {},
-          originalImageUrl: data.originalImageUrl,
-          confidence: data.confidence || 0,
+        const docData = doc.data()
+
+        // If searching for specific file, filter by fileName
+        if (fileName) {
+          const docFileName = docData.fileName || docData.name || docData.originalName || ""
+          if (!docFileName.toLowerCase().includes(fileName.toLowerCase())) {
+            return // Skip this document
+          }
+        }
+
+        data.push({
+          id: doc.id, // This is the auto-generated document ID
+          fileName: docData.fileName || docData.name || docData.originalName || `Document ${doc.id.substring(0, 8)}`,
+          processedAt:
+            docData.processedAt?.toDate() || docData.uploadedAt?.toDate() || docData.createdAt?.toDate() || new Date(),
+          status: docData.status || docData.state || "processed",
+          data: {
+            documentId: doc.id,
+            ...docData,
+          },
         })
       })
 
-      setInvoices(invoicesData)
-    } catch (error) {
-      console.error("Error fetching processed invoices:", error)
+      // Sort by processed date (newest first)
+      data.sort((a, b) => b.processedAt.getTime() - a.processedAt.getTime())
+
+      setProcessedData(data)
+      // Apply filters to the new data
+      applyFilters(data, filters)
+
+      if (fileName && data.length > 0) {
+        setSelectedJson(data[0].data)
+      }
+
       toast({
-        title: "Error",
-        description: "Failed to fetch processed invoices",
+        title: "Data fetched",
+        description: `Found ${data.length} document(s) in /invoices collection.`,
+      })
+    } catch (error) {
+      console.error("Error fetching data:", error)
+      toast({
+        title: "Fetch failed",
+        description: "Error fetching data from Firestore /invoices collection.",
         variant: "destructive",
       })
     } finally {
-      setLoading(false)
+      setFetchingData(false)
     }
   }
 
-  const deleteInvoice = async (invoice: ProcessedInvoice) => {
+  const applyFilters = (data: ProcessedData[], filterState: FilterState) => {
+    let filtered = [...data]
+
+    // Filter by status
+    if (filterState.status !== "all") {
+      filtered = filtered.filter((item) => {
+        const status = item.status.toLowerCase()
+        switch (filterState.status) {
+          case "approved":
+            return status === "approved"
+          case "rejected":
+            return status === "rejected"
+          case "pending":
+            return status === "processed" || status === "pending"
+          default:
+            return true
+        }
+      })
+    }
+
+    // Filter by validation
+    if (filterState.validation !== "all") {
+      filtered = filtered.filter((item) => {
+        const validation = validateInvoiceTotal(item.data)
+        return filterState.validation === "valid" ? validation.isValid : !validation.isValid
+      })
+    }
+
+    // Filter by date range
+    if (filterState.dateRange.from || filterState.dateRange.to) {
+      filtered = filtered.filter((item) => {
+        const itemDate = item.processedAt
+        const fromDate = filterState.dateRange.from
+        const toDate = filterState.dateRange.to
+
+        // If only 'from' date is set
+        if (fromDate && !toDate) {
+          return itemDate >= fromDate
+        }
+
+        // If only 'to' date is set
+        if (!fromDate && toDate) {
+          // Set to end of day for 'to' date
+          const endOfToDate = new Date(toDate)
+          endOfToDate.setHours(23, 59, 59, 999)
+          return itemDate <= endOfToDate
+        }
+
+        // If both dates are set
+        if (fromDate && toDate) {
+          const endOfToDate = new Date(toDate)
+          endOfToDate.setHours(23, 59, 59, 999)
+          return itemDate >= fromDate && itemDate <= endOfToDate
+        }
+
+        return true
+      })
+    }
+
+    // Filter by search term
+    if (filterState.search.trim()) {
+      const searchTerm = filterState.search.toLowerCase()
+      filtered = filtered.filter((item) => {
+        const invoiceData = extractInvoiceData(item.data)
+        return (
+          invoiceData.invoiceNumber.toLowerCase().includes(searchTerm) ||
+          invoiceData.vendorName.toLowerCase().includes(searchTerm) ||
+          item.fileName.toLowerCase().includes(searchTerm)
+        )
+      })
+    }
+
+    setFilteredData(filtered)
+  }
+
+  const handleFilterChange = (key: keyof FilterState, value: any) => {
+    const newFilters = { ...filters, [key]: value }
+    setFilters(newFilters)
+    applyFilters(processedData, newFilters)
+  }
+
+  const handleDateRangeChange = (field: "from" | "to", date: Date | undefined) => {
+    const newDateRange = { ...filters.dateRange, [field]: date }
+    const newFilters = { ...filters, dateRange: newDateRange }
+    setFilters(newFilters)
+    applyFilters(processedData, newFilters)
+  }
+
+  const clearFilters = () => {
+    const clearedFilters = {
+      status: "all",
+      validation: "all",
+      search: "",
+      dateRange: { from: undefined, to: undefined },
+    }
+    setFilters(clearedFilters)
+    applyFilters(processedData, clearedFilters)
+  }
+
+  const clearDateRange = () => {
+    handleFilterChange("dateRange", { from: undefined, to: undefined })
+  }
+
+  // Quick date range presets
+  const setDateRangePreset = (preset: string) => {
+    const today = new Date()
+    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate())
+    let from: Date | undefined
+    let to: Date | undefined
+
+    switch (preset) {
+      case "today":
+        from = startOfToday
+        to = today
+        break
+      case "yesterday":
+        const yesterday = new Date(startOfToday)
+        yesterday.setDate(yesterday.getDate() - 1)
+        from = yesterday
+        to = yesterday
+        break
+      case "last7days":
+        from = new Date(startOfToday)
+        from.setDate(from.getDate() - 7)
+        to = today
+        break
+      case "last30days":
+        from = new Date(startOfToday)
+        from.setDate(from.getDate() - 30)
+        to = today
+        break
+      case "thisMonth":
+        from = new Date(today.getFullYear(), today.getMonth(), 1)
+        to = today
+        break
+      case "lastMonth":
+        const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+        const lastDayOfLastMonth = new Date(today.getFullYear(), today.getMonth(), 0)
+        from = lastMonth
+        to = lastDayOfLastMonth
+        break
+    }
+
+    if (from || to) {
+      handleFilterChange("dateRange", { from, to })
+    }
+  }
+
+  const updateInvoiceStatus = async (documentId: string, newStatus: "approved" | "rejected") => {
+    setUpdatingStatus(documentId)
     try {
-      await deleteDoc(doc(db, "processed_invoices", invoice.id))
+      const docRef = doc(db, "invoices", documentId)
+      await updateDoc(docRef, {
+        status: newStatus,
+        reviewedAt: new Date(),
+        reviewedBy: "admin", // You can replace this with actual user info
+      })
 
       // Update local state
-      setInvoices((prev) => prev.filter((inv) => inv.id !== invoice.id))
+      const updatedData = processedData.map((item) =>
+        item.id === documentId
+          ? {
+              ...item,
+              status: newStatus,
+              data: {
+                ...item.data,
+                status: newStatus,
+                reviewedAt: new Date(),
+                reviewedBy: "admin",
+              },
+            }
+          : item,
+      )
+
+      setProcessedData(updatedData)
+      // Reapply filters to updated data
+      applyFilters(updatedData, filters)
+
+      toast({
+        title: `Invoice ${newStatus}`,
+        description: `Invoice has been ${newStatus} successfully.`,
+      })
+    } catch (error) {
+      console.error("Error updating status:", error)
+      toast({
+        title: "Update failed",
+        description: `Failed to ${newStatus === "approved" ? "approve" : "reject"} the invoice.`,
+        variant: "destructive",
+      })
+    } finally {
+      setUpdatingStatus(null)
+    }
+  }
+
+  const deleteInvoice = async (documentId: string, fileName: string) => {
+    setUpdatingStatus(documentId)
+    try {
+      const docRef = doc(db, "invoices", documentId)
+      await deleteDoc(docRef)
+
+      // Update local state
+      const updatedData = processedData.filter((item) => item.id !== documentId)
+      setProcessedData(updatedData)
+      // Reapply filters to updated data
+      applyFilters(updatedData, filters)
 
       toast({
         title: "Invoice deleted",
-        description: `${invoice.fileName} has been permanently deleted.`,
+        description: `${fileName} has been deleted successfully.`,
       })
     } catch (error) {
       console.error("Error deleting invoice:", error)
       toast({
         title: "Delete failed",
-        description: "There was an error deleting the invoice.",
+        description: "Failed to delete the invoice.",
         variant: "destructive",
       })
+    } finally {
+      setUpdatingStatus(null)
     }
   }
 
-  const handleDeleteClick = (invoice: ProcessedInvoice) => {
-    setInvoiceToDelete(invoice)
-    setDeleteDialogOpen(true)
-  }
+  const extractInvoiceData = (data: any) => {
+    // Try different possible field names for each property
+    const invoiceNumber = data.invoiceNumber || data.invoice_number || data.number || data.invoiceNo || "N/A"
+    const vendorName = data.vendorName || data.vendor_name || data.vendor || data.supplier || data.company || "N/A"
+    const invoiceDate = data.invoiceDate || data.invoice_date || data.date || data.issueDate || "N/A"
+    const totalAmount = data.totalAmount || data.total_amount || data.total || data.amount || data.grandTotal || "N/A"
+    const status = data.status || data.state || data.processing_status || "processed"
 
-  const confirmDelete = async () => {
-    if (invoiceToDelete) {
-      await deleteInvoice(invoiceToDelete)
-      setDeleteDialogOpen(false)
-      setInvoiceToDelete(null)
+    return {
+      invoiceNumber,
+      vendorName,
+      invoiceDate,
+      totalAmount,
+      status,
     }
   }
 
-  const applyFilters = () => {
-    let filtered = [...invoices]
+  const validateInvoiceTotal = (data: any) => {
+    const items = data.items || []
+    const totalAmount = data.totalAmount || data.total_amount || data.total || data.amount || data.grandTotal || 0
+    const gstAmount = data.gstAmount || data.gst_amount || data.gst || data.tax || data.taxAmount || 0
 
-    // Search filter
-    if (searchTerm) {
-      filtered = filtered.filter(
-        (invoice) =>
-          invoice.fileName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          invoice.extractedData.invoiceNumber?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          invoice.extractedData.vendor?.toLowerCase().includes(searchTerm.toLowerCase()),
-      )
-    }
-
-    // Status filter
-    if (statusFilter !== "all") {
-      filtered = filtered.filter((invoice) => invoice.status === statusFilter)
-    }
-
-    // Date filter
-    if (dateFilter !== "all") {
-      const now = new Date()
-      const filterDate = new Date()
-
-      switch (dateFilter) {
-        case "today":
-          filterDate.setHours(0, 0, 0, 0)
-          filtered = filtered.filter((invoice) => invoice.processedAt >= filterDate)
-          break
-        case "week":
-          filterDate.setDate(now.getDate() - 7)
-          filtered = filtered.filter((invoice) => invoice.processedAt >= filterDate)
-          break
-        case "month":
-          filterDate.setMonth(now.getMonth() - 1)
-          filtered = filtered.filter((invoice) => invoice.processedAt >= filterDate)
-          break
+    if (items.length === 0) {
+      return {
+        isValid: false,
+        message: "No items found",
+        itemsTotal: 0,
+        gstAmount: Number.parseFloat(gstAmount.toString()) || 0,
+        invoiceTotal: Number.parseFloat(totalAmount.toString()) || 0,
+        calculatedTotal: 0,
+        difference: 0,
       }
     }
 
-    setFilteredInvoices(filtered)
-  }
+    // Calculate sum of all item totals (before GST)
+    const itemsTotal = items.reduce((sum: number, item: any) => {
+      const itemTotal = Number.parseFloat(item.total || item.amount || "0")
+      return sum + itemTotal
+    }, 0)
 
-  const exportToCSV = () => {
-    const csvContent = [
-      ["File Name", "Invoice Number", "Date", "Vendor", "Total", "Currency", "Status", "Processed At"].join(","),
-      ...filteredInvoices.map((invoice) =>
-        [
-          invoice.fileName,
-          invoice.extractedData.invoiceNumber || "",
-          invoice.extractedData.date || "",
-          invoice.extractedData.vendor || "",
-          invoice.extractedData.total || "",
-          invoice.extractedData.currency || "",
-          invoice.status,
-          invoice.processedAt.toLocaleDateString(),
-        ].join(","),
-      ),
-    ].join("\n")
+    const parsedGstAmount = Number.parseFloat(gstAmount.toString()) || 0
+    const invoiceTotal = Number.parseFloat(totalAmount.toString()) || 0
 
-    const blob = new Blob([csvContent], { type: "text/csv" })
-    const url = window.URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `processed_invoices_${new Date().toISOString().split("T")[0]}.csv`
-    a.click()
-    window.URL.revokeObjectURL(url)
-  }
+    // Calculate expected total (items + GST)
+    const calculatedTotal = itemsTotal + parsedGstAmount
+    const difference = Math.abs(calculatedTotal - invoiceTotal)
 
-  const formatCurrency = (amount: number, currency = "USD") => {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: currency,
-    }).format(amount)
-  }
+    // Consider valid if difference is less than 0.01 (to handle floating point precision)
+    const isValid = difference < 0.01
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "completed":
-        return <Badge className="bg-green-100 text-green-800">Completed</Badge>
-      case "processing":
-        return <Badge className="bg-yellow-100 text-yellow-800">Processing</Badge>
-      case "error":
-        return <Badge className="bg-red-100 text-red-800">Error</Badge>
-      default:
-        return <Badge variant="secondary">Unknown</Badge>
+    return {
+      isValid,
+      message: isValid ? "Valid" : `Mismatch: ₹${difference.toFixed(2)}`,
+      itemsTotal,
+      gstAmount: parsedGstAmount,
+      invoiceTotal,
+      calculatedTotal,
+      difference,
     }
   }
 
-  if (loading) {
-    return (
-      <div className="container mx-auto p-6">
-        <div className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-            <p className="text-muted-foreground">Loading processed invoices...</p>
-          </div>
-        </div>
-      </div>
-    )
+  const toggleRowExpansion = (id: string) => {
+    const newExpanded = new Set(expandedRows)
+    if (newExpanded.has(id)) {
+      newExpanded.delete(id)
+    } else {
+      newExpanded.add(id)
+    }
+    setExpandedRows(newExpanded)
   }
+
+  const formatCurrency = (amount: string | number) => {
+    if (!amount || amount === "N/A") return "N/A"
+    const numAmount = typeof amount === "string" ? Number.parseFloat(amount) : amount
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+    }).format(numAmount)
+  }
+
+  const getStatusBadge = (status: string) => {
+    switch (status.toLowerCase()) {
+      case "approved":
+        return <Badge className="bg-green-500 hover:bg-green-600">Approved</Badge>
+      case "rejected":
+        return <Badge variant="destructive">Rejected</Badge>
+      case "processed":
+        return <Badge variant="secondary">Pending Review</Badge>
+      default:
+        return <Badge variant="outline">{status}</Badge>
+    }
+  }
+
+  // Calculate statistics based on filtered data
+  const getFilteredStats = () => {
+    const total = filteredData.length
+    const approved = filteredData.filter((item) => item.status === "approved").length
+    const rejected = filteredData.filter((item) => item.status === "rejected").length
+    const pending = filteredData.filter((item) => item.status === "processed" || item.status === "pending").length
+    const valid = filteredData.filter((item) => validateInvoiceTotal(item.data).isValid).length
+    const invalid = filteredData.filter((item) => !validateInvoiceTotal(item.data).isValid).length
+    const totalValue = filteredData.reduce((sum, item) => {
+      const invoiceData = extractInvoiceData(item.data)
+      const amount = Number.parseFloat(invoiceData.totalAmount.toString()) || 0
+      return sum + amount
+    }, 0)
+
+    return { total, approved, rejected, pending, valid, invalid, totalValue }
+  }
+
+  const stats = getFilteredStats()
+
+  const getFirebaseDownloadUrl = async (gsUrl: string): Promise<string> => {
+    try {
+      // Extract the path from gs:// URL
+      const path = gsUrl.replace("gs://smartinvoice-ai.firebasestorage.app/", "")
+      const storageRef = ref(storage, path)
+      const downloadUrl = await getDownloadURL(storageRef)
+      return downloadUrl
+    } catch (error) {
+      console.error("Error getting download URL:", error)
+      throw error
+    }
+  }
+
+  // Image validation functions
+  const detectBlur = (canvas: HTMLCanvasElement): boolean => {
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return false
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const data = imageData.data
+
+    // Convert to grayscale and calculate variance
+    let sum = 0
+    let sumSquared = 0
+    const pixelCount = data.length / 4
+
+    for (let i = 0; i < data.length; i += 4) {
+      const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
+      sum += gray
+      sumSquared += gray * gray
+    }
+
+    const mean = sum / pixelCount
+    const variance = sumSquared / pixelCount - mean * mean
+
+    // Low variance indicates blur
+    return variance < 1000
+  }
+
+  const detectGlare = (canvas: HTMLCanvasElement): boolean => {
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return false
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const data = imageData.data
+
+    let overexposedPixels = 0
+    const totalPixels = data.length / 4
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i]
+      const g = data[i + 1]
+      const b = data[i + 2]
+
+      // Check if pixel is overexposed (very bright)
+      if (r > 240 && g > 240 && b > 240) {
+        overexposedPixels++
+      }
+    }
+
+    const overexposurePercentage = (overexposedPixels / totalPixels) * 100
+
+    // More than 15% overexposed pixels indicates glare
+    return overexposurePercentage > 15
+  }
+
+  const validateImage = async (file: File): Promise<{ isValid: boolean; issues: string[] }> => {
+    return new Promise((resolve) => {
+      const img = new Image()
+      const canvas = document.createElement("canvas")
+      const ctx = canvas.getContext("2d")
+
+      if (!ctx) {
+        resolve({ isValid: false, issues: ["Unable to process image"] })
+        return
+      }
+
+      img.onload = () => {
+        canvas.width = img.width
+        canvas.height = img.height
+        ctx.drawImage(img, 0, 0)
+
+        const issues: string[] = []
+
+        // Check for blur
+        if (detectBlur(canvas)) {
+          issues.push("Image appears to be blurry or out of focus")
+        }
+
+        // Check for glare
+        if (detectGlare(canvas)) {
+          issues.push("Image has excessive glare or overexposure")
+        }
+
+        resolve({
+          isValid: issues.length === 0,
+          issues,
+        })
+      }
+
+      img.onerror = () => {
+        resolve({ isValid: false, issues: ["Unable to load image for validation"] })
+      }
+
+      img.src = URL.createObjectURL(file)
+    })
+  }
+
+  // Auto-fetch data on component mount
+  React.useEffect(() => {
+    fetchProcessedData()
+  }, [])
 
   return (
     <div className="container mx-auto p-6 space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Link href="/admin">
-            <Button variant="outline" size="sm">
+            <Button variant="ghost" size="sm">
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back to Upload
             </Button>
           </Link>
           <div>
-            <h1 className="text-3xl font-bold">Processed Invoices</h1>
-            <p className="text-muted-foreground">
-              {filteredInvoices.length} of {invoices.length} invoices
-            </p>
+            <h1 className="text-3xl font-bold">Processed Invoice Data</h1>
+            <p className="text-muted-foreground">View and analyze processed invoice results</p>
           </div>
         </div>
-        <Button onClick={exportToCSV} disabled={filteredInvoices.length === 0}>
-          <Download className="h-4 w-4 mr-2" />
-          Export CSV
+        <Button variant="outline" size="sm" onClick={() => fetchProcessedData()} disabled={fetchingData}>
+          {fetchingData ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          Refresh
         </Button>
       </div>
 
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2">
-              <FileText className="h-5 w-5 text-blue-500" />
-              <div>
-                <p className="text-sm text-muted-foreground">Total Invoices</p>
-                <p className="text-2xl font-bold">{invoices.length}</p>
+      {/* Filter Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Filter className="h-5 w-5" />
+            Filters
+          </CardTitle>
+          <CardDescription>Filter invoices by status, validation, date range, or search terms</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="status-filter">Status</Label>
+              <Select value={filters.status} onValueChange={(value) => handleFilterChange("status", value)}>
+                <SelectTrigger id="status-filter">
+                  <SelectValue placeholder="All Statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Statuses</SelectItem>
+                  <SelectItem value="pending">Pending Review</SelectItem>
+                  <SelectItem value="approved">Approved</SelectItem>
+                  <SelectItem value="rejected">Rejected</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="validation-filter">Validation</Label>
+              <Select value={filters.validation} onValueChange={(value) => handleFilterChange("validation", value)}>
+                <SelectTrigger id="validation-filter">
+                  <SelectValue placeholder="All Validations" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Validations</SelectItem>
+                  <SelectItem value="valid">Valid Invoices</SelectItem>
+                  <SelectItem value="invalid">Invalid Invoices</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="search-filter">Search</Label>
+              <Input
+                id="search-filter"
+                placeholder="Invoice number, vendor..."
+                value={filters.search}
+                onChange={(e) => handleFilterChange("search", e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Date Range</Label>
+              <div className="flex gap-2">
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className="flex-1 justify-start text-left font-normal bg-transparent">
+                      <Calendar className="mr-2 h-4 w-4" />
+                      {filters.dateRange.from ? format(filters.dateRange.from, "MMM dd") : "From"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <CalendarComponent
+                      mode="single"
+                      selected={filters.dateRange.from}
+                      onSelect={(date) => handleDateRangeChange("from", date)}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
+
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className="flex-1 justify-start text-left font-normal bg-transparent">
+                      <Calendar className="mr-2 h-4 w-4" />
+                      {filters.dateRange.to ? format(filters.dateRange.to, "MMM dd") : "To"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <CalendarComponent
+                      mode="single"
+                      selected={filters.dateRange.to}
+                      onSelect={(date) => handleDateRangeChange("to", date)}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
               </div>
             </div>
+
+            <div className="space-y-2">
+              <Label>&nbsp;</Label>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={clearFilters} className="flex-1 bg-transparent">
+                  Clear All
+                </Button>
+                <Badge variant="secondary" className="px-3 py-1">
+                  {stats.total} results
+                </Badge>
+              </div>
+            </div>
+          </div>
+
+          {/* Date Range Presets */}
+          <div className="mt-4 space-y-2">
+            <Label className="text-sm text-muted-foreground">Quick Date Ranges:</Label>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => setDateRangePreset("today")}>
+                Today
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setDateRangePreset("yesterday")}>
+                Yesterday
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setDateRangePreset("last7days")}>
+                Last 7 Days
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setDateRangePreset("last30days")}>
+                Last 30 Days
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setDateRangePreset("thisMonth")}>
+                This Month
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setDateRangePreset("lastMonth")}>
+                Last Month
+              </Button>
+              {(filters.dateRange.from || filters.dateRange.to) && (
+                <Button variant="ghost" size="sm" onClick={clearDateRange}>
+                  <X className="h-4 w-4 mr-1" />
+                  Clear Dates
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* Active Filters Display */}
+          {(filters.status !== "all" ||
+            filters.validation !== "all" ||
+            filters.search.trim() ||
+            filters.dateRange.from ||
+            filters.dateRange.to) && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              <span className="text-sm text-muted-foreground">Active filters:</span>
+              {filters.status !== "all" && (
+                <Badge variant="outline" className="gap-1">
+                  Status: {filters.status}
+                  <button
+                    onClick={() => handleFilterChange("status", "all")}
+                    className="ml-1 hover:bg-muted rounded-full"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              )}
+              {filters.validation !== "all" && (
+                <Badge variant="outline" className="gap-1">
+                  Validation: {filters.validation}
+                  <button
+                    onClick={() => handleFilterChange("validation", "all")}
+                    className="ml-1 hover:bg-muted rounded-full"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              )}
+              {filters.search.trim() && (
+                <Badge variant="outline" className="gap-1">
+                  Search: "{filters.search}"
+                  <button onClick={() => handleFilterChange("search", "")} className="ml-1 hover:bg-muted rounded-full">
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              )}
+              {(filters.dateRange.from || filters.dateRange.to) && (
+                <Badge variant="outline" className="gap-1">
+                  Date: {filters.dateRange.from ? format(filters.dateRange.from, "MMM dd") : "Start"} -{" "}
+                  {filters.dateRange.to ? format(filters.dateRange.to, "MMM dd") : "End"}
+                  <button onClick={clearDateRange} className="ml-1 hover:bg-muted rounded-full">
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Statistics Cards - Updated to show filtered results */}
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Total Results</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.total}</div>
+            <p className="text-xs text-muted-foreground">of {processedData.length} total</p>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2">
-              <DollarSign className="h-5 w-5 text-green-500" />
-              <div>
-                <p className="text-sm text-muted-foreground">Total Value</p>
-                <p className="text-2xl font-bold">
-                  {formatCurrency(
-                    invoices
-                      .filter((inv) => inv.extractedData.total)
-                      .reduce((sum, inv) => sum + (inv.extractedData.total || 0), 0),
-                  )}
-                </p>
-              </div>
-            </div>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Approved</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-600">{stats.approved}</div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2">
-              <Calendar className="h-5 w-5 text-purple-500" />
-              <div>
-                <p className="text-sm text-muted-foreground">This Month</p>
-                <p className="text-2xl font-bold">
-                  {
-                    invoices.filter((inv) => {
-                      const monthAgo = new Date()
-                      monthAgo.setMonth(monthAgo.getMonth() - 1)
-                      return inv.processedAt >= monthAgo
-                    }).length
-                  }
-                </p>
-              </div>
-            </div>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Rejected</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-red-600">{stats.rejected}</div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2">
-              <Filter className="h-5 w-5 text-orange-500" />
-              <div>
-                <p className="text-sm text-muted-foreground">Completed</p>
-                <p className="text-2xl font-bold">{invoices.filter((inv) => inv.status === "completed").length}</p>
-              </div>
-            </div>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Pending</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-orange-600">{stats.pending}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Valid</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-blue-600">{stats.valid}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Invalid</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-purple-600">{stats.invalid}</div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Filters */}
-      <Card>
-        <CardContent className="p-4">
-          <div className="flex flex-col md:flex-row gap-4">
-            <div className="flex-1">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search by filename, invoice number, or vendor..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-            </div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-full md:w-48">
-                <SelectValue placeholder="Filter by status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="completed">Completed</SelectItem>
-                <SelectItem value="processing">Processing</SelectItem>
-                <SelectItem value="error">Error</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={dateFilter} onValueChange={setDateFilter}>
-              <SelectTrigger className="w-full md:w-48">
-                <SelectValue placeholder="Filter by date" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Time</SelectItem>
-                <SelectItem value="today">Today</SelectItem>
-                <SelectItem value="week">Last Week</SelectItem>
-                <SelectItem value="month">Last Month</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Invoices Table */}
+      {/* Processed Data Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Invoice Data</CardTitle>
-          <CardDescription>Extracted information from processed invoices</CardDescription>
+          <CardTitle>Invoice Processing Results</CardTitle>
+          <CardDescription>Detailed view of filtered invoices with validation and approval actions</CardDescription>
         </CardHeader>
         <CardContent>
-          {filteredInvoices.length === 0 ? (
+          {filteredData.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              <FileText className="mx-auto h-12 w-12 mb-4" />
-              <p>No processed invoices found</p>
-              <p className="text-sm">Try adjusting your filters or upload some invoices</p>
+              <Search className="mx-auto h-12 w-12 mb-4" />
+              <p>No invoices match the current filters</p>
+              <Button variant="outline" onClick={clearFilters} className="mt-2 bg-transparent">
+                Clear Filters
+              </Button>
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="space-y-4">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>File Name</TableHead>
-                    <TableHead>Invoice #</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Vendor</TableHead>
-                    <TableHead>Total</TableHead>
+                    <TableHead className="w-[50px]"></TableHead>
+                    <TableHead>Invoice Number</TableHead>
+                    <TableHead>Vendor Name</TableHead>
+                    <TableHead>Invoice Date</TableHead>
+                    <TableHead>Total Amount</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Processed</TableHead>
+                    <TableHead>Validation</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredInvoices.map((invoice) => (
-                    <TableRow key={invoice.id}>
-                      <TableCell className="font-medium">{invoice.fileName}</TableCell>
-                      <TableCell>{invoice.extractedData.invoiceNumber || "N/A"}</TableCell>
-                      <TableCell>{invoice.extractedData.date || "N/A"}</TableCell>
-                      <TableCell>{invoice.extractedData.vendor || "N/A"}</TableCell>
-                      <TableCell>
-                        {invoice.extractedData.total
-                          ? formatCurrency(invoice.extractedData.total, invoice.extractedData.currency)
-                          : "N/A"}
-                      </TableCell>
-                      <TableCell>{getStatusBadge(invoice.status)}</TableCell>
-                      <TableCell>{invoice.processedAt.toLocaleDateString()}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          {invoice.originalImageUrl && (
+                  {filteredData.map((item) => {
+                    const invoiceData = extractInvoiceData(item.data)
+                    const validation = validateInvoiceTotal(item.data)
+                    const isExpanded = expandedRows.has(item.id)
+                    const items = item.data.items || []
+                    const isUpdating = updatingStatus === item.id
+
+                    return (
+                      <React.Fragment key={item.id}>
+                        <TableRow>
+                          <TableCell>
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => window.open(invoice.originalImageUrl, "_blank")}
+                              onClick={() => toggleRowExpansion(item.id)}
+                              className="p-0 h-6 w-6"
                             >
-                              <Eye className="h-4 w-4" />
+                              {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                             </Button>
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteClick(invoice)}
-                            className="text-destructive hover:text-destructive"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                          </TableCell>
+                          <TableCell className="font-medium">{invoiceData.invoiceNumber}</TableCell>
+                          <TableCell>{invoiceData.vendorName}</TableCell>
+                          <TableCell>{invoiceData.invoiceDate}</TableCell>
+                          <TableCell>{formatCurrency(invoiceData.totalAmount)}</TableCell>
+                          <TableCell>{getStatusBadge(invoiceData.status)}</TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              {validation.isValid ? (
+                                <CheckCircle className="h-4 w-4 text-green-500" />
+                              ) : (
+                                <XCircle className="h-4 w-4 text-red-500" />
+                              )}
+                              <Badge variant={validation.isValid ? "default" : "destructive"}>
+                                {validation.message}
+                              </Badge>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              {/* Approve/Reject buttons - only show if not already approved/rejected */}
+                              {invoiceData.status !== "approved" && invoiceData.status !== "rejected" && (
+                                <>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => updateInvoiceStatus(item.id, "approved")}
+                                    disabled={isUpdating}
+                                    className="text-green-600 hover:text-green-700 hover:bg-green-50"
+                                  >
+                                    {isUpdating ? (
+                                      <RefreshCw className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Check className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => updateInvoiceStatus(item.id, "rejected")}
+                                    disabled={isUpdating}
+                                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                                  >
+                                    {isUpdating ? (
+                                      <RefreshCw className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <X className="h-4 w-4" />
+                                    )}
+                                  </Button>
+                                </>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+
+                        {/* Expanded Row Content */}
+                        {isExpanded && (
+                          <TableRow>
+                            <TableCell colSpan={8} className="bg-muted/50">
+                              <div className="p-4 space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  {/* Invoice Details */}
+                                  <Card>
+                                    <CardHeader className="pb-3">
+                                      <CardTitle className="text-sm">Invoice Details</CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="space-y-2 text-sm">
+                                      <div className="flex justify-between">
+                                        <span className="text-muted-foreground">File Name:</span>
+                                        <span className="font-medium">{item.fileName}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span className="text-muted-foreground">Processed:</span>
+                                        <span>{item.processedAt.toLocaleString()}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span className="text-muted-foreground">Document ID:</span>
+                                        <span className="font-mono text-xs">{item.id}</span>
+                                      </div>
+                                    </CardContent>
+                                  </Card>
+
+                                  {/* Validation Details */}
+                                  <Card>
+                                    <CardHeader className="pb-3">
+                                      <CardTitle className="text-sm">Validation Details</CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="space-y-2 text-sm">
+                                      <div className="flex justify-between">
+                                        <span className="text-muted-foreground">Items Total:</span>
+                                        <span>{formatCurrency(validation.itemsTotal)}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span className="text-muted-foreground">GST Amount:</span>
+                                        <span>{formatCurrency(validation.gstAmount)}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span className="text-muted-foreground">Calculated Total:</span>
+                                        <span>{formatCurrency(validation.calculatedTotal)}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span className="text-muted-foreground">Invoice Total:</span>
+                                        <span className="font-medium">{formatCurrency(validation.invoiceTotal)}</span>
+                                      </div>
+                                      {!validation.isValid && (
+                                        <div className="flex justify-between text-red-600">
+                                          <span>Difference:</span>
+                                          <span className="font-medium">{formatCurrency(validation.difference)}</span>
+                                        </div>
+                                      )}
+                                    </CardContent>
+                                  </Card>
+                                </div>
+
+                                {/* Items Table */}
+                                {items.length > 0 && (
+                                  <Card>
+                                    <CardHeader className="pb-3">
+                                      <CardTitle className="text-sm">Invoice Items ({items.length})</CardTitle>
+                                    </CardHeader>
+                                    <CardContent>
+                                      <div className="overflow-x-auto">
+                                        <Table>
+                                          <TableHeader>
+                                            <TableRow>
+                                              <TableHead className="text-xs">Description</TableHead>
+                                              <TableHead className="text-xs">Quantity</TableHead>
+                                              <TableHead className="text-xs">Unit Price</TableHead>
+                                              <TableHead className="text-xs">Total</TableHead>
+                                            </TableRow>
+                                          </TableHeader>
+                                          <TableBody>
+                                            {items.map((item: any, index: number) => (
+                                              <TableRow key={index}>
+                                                <TableCell className="text-xs">
+                                                  {item.description || item.name || `Item ${index + 1}`}
+                                                </TableCell>
+                                                <TableCell className="text-xs">
+                                                  {item.quantity || item.qty || "N/A"}
+                                                </TableCell>
+                                                <TableCell className="text-xs">
+                                                  {formatCurrency(item.unitPrice || item.rate || item.price || 0)}
+                                                </TableCell>
+                                                <TableCell className="text-xs font-medium">
+                                                  {formatCurrency(item.total || item.amount || 0)}
+                                                </TableCell>
+                                              </TableRow>
+                                            ))}
+                                          </TableBody>
+                                        </Table>
+                                      </div>
+                                    </CardContent>
+                                  </Card>
+                                )}
+
+                                {/* Raw JSON Data */}
+                                <Card>
+                                  <CardHeader className="pb-3">
+                                    <CardTitle className="text-sm">Raw Data</CardTitle>
+                                  </CardHeader>
+                                  <CardContent>
+                                    <pre className="text-xs bg-muted p-3 rounded-md overflow-auto max-h-40">
+                                      {JSON.stringify(item.data, null, 2)}
+                                    </pre>
+                                  </CardContent>
+                                </Card>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </React.Fragment>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </div>
           )}
         </CardContent>
       </Card>
-
-      {/* Delete Confirmation Dialog */}
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-destructive" />
-              Delete Invoice
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete <strong>{invoiceToDelete?.fileName}</strong>?
-              <br />
-              <br />
-              This action cannot be undone. The invoice data will be permanently removed from the database.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setInvoiceToDelete(null)}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-destructive hover:bg-destructive/90">
-              Delete Invoice
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   )
 }
