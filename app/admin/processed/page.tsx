@@ -5,7 +5,19 @@ import { useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { RefreshCw, Search, CheckCircle, XCircle, Eye, ArrowLeft, Check, X, Filter, Calendar } from "lucide-react"
+import {
+  RefreshCw,
+  Search,
+  CheckCircle,
+  XCircle,
+  Eye,
+  ArrowLeft,
+  Check,
+  X,
+  Filter,
+  Calendar,
+  FileIcon,
+} from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { initializeApp } from "firebase/app"
 import { getFirestore, collection, query, getDocs, limit, doc, updateDoc } from "firebase/firestore"
@@ -68,6 +80,7 @@ export default function ProcessedDataPage() {
   })
   const { toast } = useToast()
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set())
+  const [selectedFile, setSelectedFile] = useState<{ url: string; name: string; type: string } | null>(null)
 
   const fetchProcessedData = async (fileName?: string) => {
     setFetchingData(true)
@@ -806,7 +819,29 @@ export default function ProcessedDataPage() {
                                   </Button>
                                 </>
                               )}
-                              <Button variant="ghost" size="sm" onClick={() => setSelectedJson(item.data)}>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  const fileUrl = item.data.fileUrl || item.data.downloadURL || item.data.url
+                                  const fileName = item.fileName
+                                  const fileType = item.data.fileType || item.data.type || "application/pdf"
+
+                                  if (fileUrl) {
+                                    setSelectedFile({
+                                      url: fileUrl,
+                                      name: fileName,
+                                      type: fileType,
+                                    })
+                                  } else {
+                                    toast({
+                                      title: "File not found",
+                                      description: "No file URL available for preview.",
+                                      variant: "destructive",
+                                    })
+                                  }
+                                }}
+                              >
                                 <Eye className="h-4 w-4" />
                               </Button>
                               <span className="text-xs text-muted-foreground">
@@ -935,8 +970,90 @@ export default function ProcessedDataPage() {
         </CardContent>
       </Card>
 
-      {/* JSON Viewer Section */}
-      {selectedJson && (
+      {/* File Preview Section */}
+      {selectedFile && (
+        <Card>
+          <CardHeader>
+            <CardTitle>File Preview</CardTitle>
+            <CardDescription>Preview of {selectedFile.name}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => window.open(selectedFile.url, "_blank")}>
+                  Open in New Tab
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const link = document.createElement("a")
+                    link.href = selectedFile.url
+                    link.download = selectedFile.name
+                    link.click()
+                  }}
+                >
+                  Download
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setSelectedFile(null)}>
+                  Close
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setSelectedJson(selectedFile)} className="ml-auto">
+                  View JSON Data
+                </Button>
+              </div>
+
+              <div className="border rounded-lg overflow-hidden">
+                {selectedFile.type.startsWith("image/") ? (
+                  <img
+                    src={selectedFile.url || "/placeholder.svg"}
+                    alt={selectedFile.name}
+                    className="w-full max-h-[600px] object-contain bg-gray-50"
+                    onError={(e) => {
+                      console.error("Image load error:", e)
+                      toast({
+                        title: "Preview error",
+                        description: "Unable to load image preview.",
+                        variant: "destructive",
+                      })
+                    }}
+                  />
+                ) : selectedFile.type === "application/pdf" ? (
+                  <iframe
+                    src={selectedFile.url}
+                    className="w-full h-[600px]"
+                    title={`Preview of ${selectedFile.name}`}
+                    onError={(e) => {
+                      console.error("PDF load error:", e)
+                      toast({
+                        title: "Preview error",
+                        description: "Unable to load PDF preview. Try opening in new tab.",
+                        variant: "destructive",
+                      })
+                    }}
+                  />
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-[400px] text-muted-foreground">
+                    <FileIcon className="h-16 w-16 mb-4" />
+                    <p className="text-lg font-medium">Preview not available</p>
+                    <p className="text-sm">File type: {selectedFile.type}</p>
+                    <Button
+                      variant="outline"
+                      className="mt-4 bg-transparent"
+                      onClick={() => window.open(selectedFile.url, "_blank")}
+                    >
+                      Open in New Tab
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* JSON Viewer Section - Now separate from file preview */}
+      {selectedJson && !selectedFile && (
         <Card>
           <CardHeader>
             <CardTitle>Full JSON Data</CardTitle>
