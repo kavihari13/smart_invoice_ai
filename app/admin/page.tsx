@@ -61,55 +61,7 @@ export default function AdminDashboard() {
   const [showValidationDialog, setShowValidationDialog] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
-
-  // Image validation functions
-  const detectBlur = (canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): boolean => {
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-    const data = imageData.data
-
-    // Convert to grayscale and calculate variance (blur detection)
-    let sum = 0
-    let sumSquared = 0
-    const pixels = []
-
-    for (let i = 0; i < data.length; i += 4) {
-      const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
-      pixels.push(gray)
-      sum += gray
-      sumSquared += gray * gray
-    }
-
-    const mean = sum / pixels.length
-    const variance = sumSquared / pixels.length - mean * mean
-
-    // Low variance indicates blur (threshold can be adjusted)
-    return variance < 1000
-  }
-
-  const detectGlare = (canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D): boolean => {
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-    const data = imageData.data
-
-    let overexposedPixels = 0
-    const totalPixels = data.length / 4
-
-    // Check for overexposed pixels (very bright areas)
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i]
-      const g = data[i + 1]
-      const b = data[i + 2]
-
-      // Consider pixel overexposed if all RGB values are very high
-      if (r > 240 && g > 240 && b > 240) {
-        overexposedPixels++
-      }
-    }
-
-    const overexposedPercentage = (overexposedPixels / totalPixels) * 100
-
-    // If more than 15% of pixels are overexposed, consider it glare
-    return overexposedPercentage > 15
-  }
+  const [currentValidatingFile, setCurrentValidatingFile] = useState<File | null>(null)
 
   const validateImage = (file: File): Promise<string[]> => {
     return new Promise((resolve) => {
@@ -119,6 +71,7 @@ export default function AdminDashboard() {
       const ctx = canvas.getContext("2d")
 
       if (!ctx) {
+        console.error("Canvas context not available")
         resolve(["Unable to process image for validation"])
         return
       }
@@ -129,27 +82,133 @@ export default function AdminDashboard() {
         ctx.drawImage(img, 0, 0)
 
         try {
-          // Check for blur
-          if (detectBlur(canvas, ctx)) {
-            issues.push("Image appears to be blurry or out of focus")
+          console.log(`🔍 VALIDATING IMAGE: ${file.name}`)
+          console.log(`📐 Image dimensions: ${img.width}x${img.height}`)
+          console.log(`📁 File size: ${(file.size / 1024 / 1024).toFixed(2)}MB`)
+
+          // 1. Check image dimensions - very lenient now
+          if (img.width < 100 || img.height < 100) {
+            console.log(`❌ Resolution check failed: ${img.width}x${img.height}`)
+            issues.push("Image resolution is too low (minimum 100x100 pixels recommended)")
+          } else {
+            console.log("✅ Resolution check passed")
           }
 
-          // Check for glare
-          if (detectGlare(canvas, ctx)) {
-            issues.push("Image has excessive glare or overexposure")
+          // 2. Enhanced blur detection with detailed logging
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+          const data = imageData.data
+          const width = canvas.width
+          const height = canvas.height
+          let edgeSum = 0
+          let edgeCount = 0
+
+          // Sample pixels for edge detection
+          const sampleStep = Math.max(1, Math.floor(Math.min(width, height) / 50)) // Adaptive sampling
+          console.log(`🔬 Using sample step: ${sampleStep}`)
+
+          for (let y = sampleStep; y < height - sampleStep; y += sampleStep) {
+            for (let x = sampleStep; x < width - sampleStep; x += sampleStep) {
+              const centerIndex = (y * width + x) * 4
+              const rightIndex = (y * width + (x + sampleStep)) * 4
+              const bottomIndex = ((y + sampleStep) * width + x) * 4
+
+              if (rightIndex < data.length && bottomIndex < data.length) {
+                const centerGray =
+                  0.299 * data[centerIndex] + 0.587 * data[centerIndex + 1] + 0.114 * data[centerIndex + 2]
+                const rightGray = 0.299 * data[rightIndex] + 0.587 * data[rightIndex + 1] + 0.114 * data[rightIndex + 2]
+                const bottomGray =
+                  0.299 * data[bottomIndex] + 0.587 * data[bottomIndex + 1] + 0.114 * data[bottomIndex + 2]
+
+                const edgeStrength = Math.abs(centerGray - rightGray) + Math.abs(centerGray - bottomGray)
+                edgeSum += edgeStrength
+                edgeCount++
+              }
+            }
+          }
+
+          const averageEdgeStrength = edgeCount > 0 ? edgeSum / edgeCount : 0
+          console.log(`📊 Edge strength: ${averageEdgeStrength.toFixed(2)} (sampled ${edgeCount} points)`)
+
+          // Very lenient blur threshold - only flag extremely blurry images
+          const blurThreshold = 3 // Even more lenient
+          if (averageEdgeStrength < blurThreshold) {
+            console.log(`❌ Blur check failed (${averageEdgeStrength.toFixed(2)} < ${blurThreshold})`)
+            issues.push(`Image appears to be extremely blurry (edge strength: ${averageEdgeStrength.toFixed(2)})`)
+          } else {
+            console.log(`✅ Blur check passed (${averageEdgeStrength.toFixed(2)} >= ${blurThreshold})`)
+          }
+
+          // 3. Enhanced glare detection
+          let overexposedPixels = 0
+          let totalContentPixels = 0
+          let brightPixelSum = 0
+
+          // Sample every 16th pixel for performance
+          for (let i = 0; i < data.length; i += 64) {
+            const r = data[i]
+            const g = data[i + 1]
+            const b = data[i + 2]
+            const luminance = 0.299 * r + 0.587 * g + 0.114 * b
+
+            // Only consider pixels that aren't pure white background
+            if (luminance < 245) {
+              totalContentPixels++
+              brightPixelSum += luminance
+
+              // Very strict criteria for overexposure
+              if (r >= 253 && g >= 253 && b >= 253) {
+                overexposedPixels++
+              }
+            }
+          }
+
+          const overexposurePercentage = totalContentPixels > 0 ? (overexposedPixels / totalContentPixels) * 100 : 0
+          const averageBrightness = totalContentPixels > 0 ? brightPixelSum / totalContentPixels : 0
+
+          console.log(
+            `💡 Overexposure: ${overexposurePercentage.toFixed(1)}% (${overexposedPixels}/${totalContentPixels} content pixels)`,
+          )
+          console.log(`🌟 Average content brightness: ${averageBrightness.toFixed(1)}`)
+
+          // Very lenient glare threshold
+          const glareThreshold = 60 // Even more lenient
+          if (overexposurePercentage > glareThreshold) {
+            console.log(`❌ Glare check failed (${overexposurePercentage.toFixed(1)}% > ${glareThreshold}%)`)
+            issues.push(`Image has excessive glare (${overexposurePercentage.toFixed(1)}% overexposed)`)
+          } else {
+            console.log(`✅ Glare check passed (${overexposurePercentage.toFixed(1)}% <= ${glareThreshold}%)`)
+          }
+
+          // 4. Check for very dark images - more lenient
+          const darknessThreshold = 15 // Even more lenient
+          if (averageBrightness < darknessThreshold && totalContentPixels > 0) {
+            console.log(`❌ Darkness check failed (${averageBrightness.toFixed(1)} < ${darknessThreshold})`)
+            issues.push(`Image is too dark (brightness: ${averageBrightness.toFixed(1)})`)
+          } else {
+            console.log(`✅ Darkness check passed (${averageBrightness.toFixed(1)} >= ${darknessThreshold})`)
+          }
+
+          console.log(`🏁 Validation complete for ${file.name}`)
+          console.log(`📋 Issues found: ${issues.length}`)
+          if (issues.length > 0) {
+            console.log("❗ Issues:", issues)
+          } else {
+            console.log("🎉 Image passed all validation checks!")
           }
 
           resolve(issues)
         } catch (error) {
-          console.error("Error during image validation:", error)
+          console.error("💥 Error during image validation:", error)
           resolve(["Error occurred during image validation"])
         }
       }
 
       img.onerror = () => {
+        console.error("💥 Failed to load image for validation:", file.name)
         resolve(["Unable to load image for validation"])
       }
 
+      img.crossOrigin = "anonymous"
       img.src = URL.createObjectURL(file)
     })
   }
@@ -186,6 +245,7 @@ export default function AdminDashboard() {
       if (file.type.startsWith("image/")) {
         const issues = await validateImage(file)
         if (issues.length > 0) {
+          setCurrentValidatingFile(file) // Store the file reference
           validationErrors.push({
             fileName: file.name,
             issues: issues,
@@ -197,7 +257,7 @@ export default function AdminDashboard() {
       validFiles.push(file)
     }
 
-    // Show validation errors if any
+    // Show validation errors if any, but allow user to skip
     if (validationErrors.length > 0) {
       setValidationError(validationErrors[0]) // Show first error
       setShowValidationDialog(true)
@@ -409,6 +469,58 @@ export default function AdminDashboard() {
         </CardContent>
       </Card>
 
+      {/* Test Section - Remove this in production */}
+      <Card className="border-dashed border-orange-300 bg-orange-50/50">
+        <CardHeader>
+          <CardTitle className="text-orange-700">🧪 Test Blur Detection</CardTitle>
+          <CardDescription className="text-orange-600">
+            Test the validation system with different scenarios
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                // Simulate a validation error
+                setValidationError({
+                  fileName: "test-blurry-image.jpg",
+                  issues: [
+                    "Image appears to be extremely blurry (edge strength: 2.1)",
+                    "Image is too dark (brightness: 12.3)",
+                  ],
+                })
+                setShowValidationDialog(true)
+              }}
+              className="bg-orange-100 hover:bg-orange-200 text-orange-700"
+            >
+              🔍 Test Blur Modal
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                console.log("🧪 Testing validation system...")
+                console.log("📊 Current validation settings:")
+                console.log("  - Blur threshold: 3")
+                console.log("  - Glare threshold: 60%")
+                console.log("  - Darkness threshold: 15")
+                console.log("  - Min resolution: 100x100")
+                toast({
+                  title: "🧪 Test Mode",
+                  description: "Check browser console for validation settings",
+                })
+              }}
+              className="bg-blue-100 hover:bg-blue-200 text-blue-700"
+            >
+              📊 Log Settings
+            </Button>
+          </div>
+          <p className="text-xs text-orange-600">
+            Open browser console (F12) to see detailed validation logs when uploading images
+          </p>
+        </CardContent>
+      </Card>
+
       {/* Upload Status Section */}
       <Card>
         <CardHeader>
@@ -499,14 +611,39 @@ export default function AdminDashboard() {
               <p className="text-sm text-muted-foreground mt-3">
                 Please retake the photo with better lighting and focus for optimal AI processing results.
               </p>
+              <p className="text-sm font-medium mt-3">
+                If you believe this is a false positive, you can skip validation and upload anyway.
+              </p>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setValidationError(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel
+              onClick={() => {
+                setValidationError(null)
+                setCurrentValidatingFile(null)
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="outline"
+              onClick={() => {
+                // Skip validation and add the file anyway
+                if (currentValidatingFile) {
+                  setFiles((prev) => [...prev, currentValidatingFile])
+                }
+                setShowValidationDialog(false)
+                setValidationError(null)
+                setCurrentValidatingFile(null)
+              }}
+            >
+              Skip Validation & Upload
+            </AlertDialogAction>
             <AlertDialogAction
               onClick={() => {
                 setShowValidationDialog(false)
                 setValidationError(null)
+                setCurrentValidatingFile(null)
               }}
             >
               Try Again
