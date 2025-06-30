@@ -469,58 +469,6 @@ export default function AdminDashboard() {
         </CardContent>
       </Card>
 
-      {/* Test Section - Remove this in production */}
-      <Card className="border-dashed border-orange-300 bg-orange-50/50">
-        <CardHeader>
-          <CardTitle className="text-orange-700">🧪 Test Blur Detection</CardTitle>
-          <CardDescription className="text-orange-600">
-            Test the validation system with different scenarios
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={() => {
-                // Simulate a validation error
-                setValidationError({
-                  fileName: "test-blurry-image.jpg",
-                  issues: [
-                    "Image appears to be extremely blurry (edge strength: 2.1)",
-                    "Image is too dark (brightness: 12.3)",
-                  ],
-                })
-                setShowValidationDialog(true)
-              }}
-              className="bg-orange-100 hover:bg-orange-200 text-orange-700"
-            >
-              🔍 Test Blur Modal
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                console.log("🧪 Testing validation system...")
-                console.log("📊 Current validation settings:")
-                console.log("  - Blur threshold: 3")
-                console.log("  - Glare threshold: 60%")
-                console.log("  - Darkness threshold: 15")
-                console.log("  - Min resolution: 100x100")
-                toast({
-                  title: "🧪 Test Mode",
-                  description: "Check browser console for validation settings",
-                })
-              }}
-              className="bg-blue-100 hover:bg-blue-200 text-blue-700"
-            >
-              📊 Log Settings
-            </Button>
-          </div>
-          <p className="text-xs text-orange-600">
-            Open browser console (F12) to see detailed validation logs when uploading images
-          </p>
-        </CardContent>
-      </Card>
-
       {/* Upload Status Section */}
       <Card>
         <CardHeader>
